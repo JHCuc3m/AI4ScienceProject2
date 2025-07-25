@@ -21,7 +21,7 @@ try:
                 all_protein_vectors_128d.append(protein_vector)
 
     X_128d = torch.from_numpy(np.array(all_protein_vectors_128d)).float()
-    print(f"Successfully loaded data. Shape for K-Fold: {X_128d.shape}")
+    print(f"K-Fold shape: {X_128d.shape}")
 
 except (FileNotFoundError, NameError) as e:
     print(f"Error loading data: {e}. Cannot proceed.")
