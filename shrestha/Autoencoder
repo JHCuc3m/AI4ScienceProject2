@@ -10,8 +10,6 @@ from sklearn.manifold import TSNE
 try:
     file_path = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/*.npz'
     embedding_files = sorted(glob.glob(file_path))
-    if not embedding_files:
-        raise FileNotFoundError(f"No files found at path: {file_path}")
 
     all_protein_vectors_128d = []
     for file in embedding_files:
