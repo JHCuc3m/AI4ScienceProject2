@@ -1,1 +1,119 @@
+import numpy as np
+import glob
+import torch
+import torch.nn as nn
+from sklearn.model_selection import KFold
+from torch.utils.data import DataLoader, TensorDataset
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
+try:
+    file_path = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/*.npz'
+    embedding_files = sorted(glob.glob(file_path))
+    if not embedding_files:
+        raise FileNotFoundError(f"No files found at path: {file_path}")
+
+    all_protein_vectors_128d = []
+    for file in embedding_files:
+        with np.load(file) as data:
+            if 'pair' in data:
+                pair_embedding = data['pair']
+                # create the averaged vector
+                protein_vector = np.mean(pair_embedding, axis=(0, 1))
+                all_protein_vectors_128d.append(protein_vector)
+
+    X_128d = torch.from_numpy(np.array(all_protein_vectors_128d)).float()
+    print(f"Successfully loaded data. Shape for K-Fold: {X_128d.shape}")
+
+except (FileNotFoundError, NameError) as e:
+    print(f"Error loading data: {e}. Cannot proceed.")
+    exit()
+
+#start of the autoencoder
+class Autoencoder(nn.Module):
+    def __init__(self):
+        super(Autoencoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(128, 96), nn.ReLU(),
+            nn.Linear(96, 64)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(64, 96), nn.ReLU(),
+            nn.Linear(96, 128)
+        )
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
+
+# k-fold cross validation
+k_folds = 5
+num_epochs = 200
+batch_size = 16
+results = {}
+
+kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+
+for fold, (train_ids, test_ids) in enumerate(kfold.split(X_128d)):
+    print(f'FOLD {fold+1}/{k_folds}')
+
+    model = Autoencoder()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    criterion = nn.MSELoss()
+
+    train_subset = X_128d[train_ids]
+    test_subset = X_128d[test_ids]
+    train_dataset = TensorDataset(train_subset, train_subset)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    model.train()
+    for epoch in range(num_epochs):
+        for inputs, _ in train_loader:
+            reconstructed = model(inputs)
+            loss = criterion(reconstructed, inputs)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    model.eval()
+    with torch.no_grad():
+        reconstructed = model(test_subset)
+        test_loss = criterion(reconstructed, test_subset)
+        results[fold] = test_loss.item()
+        print(f'Loss for fold {fold+1}: {test_loss.item():.4f}')
+
+#visualization start
+print('\n--- Cross-Validation Results ---')
+sum_loss = 0.0
+for key, value in results.items():
+    print(f'Fold {key+1}: {value:.4f}')
+    sum_loss += value
+average_loss = sum_loss / len(results)
+print(f'Average Loss: {average_loss:.4f}')
+
+plt.figure(figsize=(10, 6))
+fold_names = [f'Fold {i+1}' for i in results.keys()]
+fold_losses = list(results.values())
+plt.bar(fold_names, fold_losses, color='skyblue')
+plt.axhline(y=average_loss, color='r', linestyle='--', label=f'Average Loss: {average_loss:.4f}')
+plt.title('K-Fold Cross-Validation Results')
+plt.xlabel('Fold')
+plt.ylabel('Test Loss (MSE)')
+plt.legend()
+plt.show()
+
+print("\nVisualizing latent space from the final fold's model...")
+model.eval()
+with torch.no_grad():
+    latent_embeddings = model.encoder(X_128d).numpy()
+
+tsne = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42)
+embeddings_2d = tsne.fit_transform(latent_embeddings)
+
+plt.figure(figsize=(10, 8))
+plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.7)
+plt.title('2D Latent Space of All Proteins (t-SNE on Final Model)')
+plt.xlabel('t-SNE Component 1')
+plt.ylabel('t-SNE Component 2')
+plt.grid(True)
+plt.show()
