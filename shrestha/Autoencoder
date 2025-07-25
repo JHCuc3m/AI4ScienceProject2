@@ -83,7 +83,6 @@ for fold, (train_ids, test_ids) in enumerate(kfold.split(X_128d)):
         print(f'Loss for fold {fold+1}: {test_loss.item():.4f}')
 
 #visualization start
-print('\n--- Cross-Validation Results ---')
 sum_loss = 0.0
 for key, value in results.items():
     print(f'Fold {key+1}: {value:.4f}')
@@ -102,7 +101,7 @@ plt.ylabel('Test Loss (MSE)')
 plt.legend()
 plt.show()
 
-print("\nVisualizing latent space from the final fold's model...")
+
 model.eval()
 with torch.no_grad():
     latent_embeddings = model.encoder(X_128d).numpy()
@@ -112,7 +111,7 @@ embeddings_2d = tsne.fit_transform(latent_embeddings)
 
 plt.figure(figsize=(10, 8))
 plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.7)
-plt.title('2D Latent Space of All Proteins (t-SNE on Final Model)')
+plt.title('2D Latent Space (t-SNE)')
 plt.xlabel('t-SNE Component 1')
 plt.ylabel('t-SNE Component 2')
 plt.grid(True)
