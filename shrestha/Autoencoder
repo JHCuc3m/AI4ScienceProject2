@@ -46,7 +46,7 @@ class Autoencoder(nn.Module):
 
 # k-fold cross validation
 k_folds = 5
-num_epochs = 200
+num_epochs = 400
 batch_size = 16
 results = {}
 
