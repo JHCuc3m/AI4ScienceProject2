@@ -10,6 +10,8 @@ from sklearn.manifold import TSNE
 try:
     file_path = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/*.npz'
     embedding_files = sorted(glob.glob(file_path))
+    if not embedding_files:
+        raise FileNotFoundError(f"No files found at path: {file_path}")
 
     all_protein_vectors_128d = []
     for file in embedding_files:
@@ -45,12 +47,12 @@ class Autoencoder(nn.Module):
         return decoded
 
 # k-fold cross validation
-k_folds = 5
+k_folds = 7
 num_epochs = 400
-batch_size = 16
+batch_size = 4
 results = {}
 
-kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+kfold = KFold(n_splits=k_folds, shuffle=True, random_state=73)
 
 for fold, (train_ids, test_ids) in enumerate(kfold.split(X_128d)):
     print(f'FOLD {fold+1}/{k_folds}')
@@ -75,31 +77,62 @@ for fold, (train_ids, test_ids) in enumerate(kfold.split(X_128d)):
 
     model.eval()
     with torch.no_grad():
-        reconstructed = model(test_subset)
-        test_loss = criterion(reconstructed, test_subset)
-        results[fold] = test_loss.item()
-        print(f'Loss for fold {fold+1}: {test_loss.item():.4f}')
+        reconstructed_test = model(test_subset)
+        test_loss = criterion(reconstructed_test, test_subset).item()
+        
+        reconstructed_train = model(train_subset)
+        train_loss = criterion(reconstructed_train, train_subset).item()
+        
+        results[fold] = {'train_loss': train_loss, 'test_loss': test_loss}
+        
+        print(f'Final Training Loss for fold {fold+1}: {train_loss:.4f}')
+        print(f'Test Loss for fold {fold+1}: {test_loss:.4f}')
+        print(f'Generalization Gap: {test_loss - train_loss:.4f}')
 
 #visualization start
-sum_loss = 0.0
-for key, value in results.items():
-    print(f'Fold {key+1}: {value:.4f}')
-    sum_loss += value
-average_loss = sum_loss / len(results)
-print(f'Average Loss: {average_loss:.4f}')
+avg_train_loss = np.mean([res['train_loss'] for res in results.values()])
+avg_test_loss = np.mean([res['test_loss'] for res in results.values()])
+# FIX: Define the avg_generalization_gap variable
+avg_generalization_gap = avg_test_loss - avg_train_loss
+print(f'Average Training Loss: {avg_train_loss:.4f}')
+print(f'Average Test Loss: {avg_test_loss:.4f}')
+print(f'Average Generalization Gap: {avg_generalization_gap:.4f}')
 
-plt.figure(figsize=(10, 6))
+#train loss vs test loss
+plt.figure(figsize=(12, 7))
 fold_names = [f'Fold {i+1}' for i in results.keys()]
-fold_losses = list(results.values())
-plt.bar(fold_names, fold_losses, color='skyblue')
-plt.axhline(y=average_loss, color='r', linestyle='--', label=f'Average Loss: {average_loss:.4f}')
-plt.title('K-Fold Cross-Validation Results')
+train_losses = [res['train_loss'] for res in results.values()]
+test_losses = [res['test_loss'] for res in results.values()]
+x = np.arange(len(fold_names))
+width = 0.35
+rects1 = plt.bar(x - width/2, train_losses, width, label='Train Loss', color='cornflowerblue')
+rects2 = plt.bar(x + width/2, test_losses, width, label='Test Loss', color='salmon')
+plt.ylabel('Loss (MSE)')
+plt.title('Training vs. Test Loss per Fold')
+plt.xticks(x, fold_names)
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.text(0.95, 0.95, f'Avg. Generalization Gap: {avg_generalization_gap:.4f}',
+         transform=plt.gca().transAxes, fontsize=12,
+         verticalalignment='top', horizontalalignment='right',
+         bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.5))
+plt.tight_layout()
+plt.show()
+
+
+#test loss
+plt.figure(figsize=(10, 6))
+fold_names_orig = [f'Fold {i+1}' for i in results.keys()]
+fold_losses_orig = [res['test_loss'] for res in results.values()]
+plt.bar(fold_names_orig, fold_losses_orig, color='skyblue')
+plt.axhline(y=avg_test_loss, color='r', linestyle='--', label=f'Average Loss: {avg_test_loss:.4f}')
+plt.title('K-Fold Cross-Validation Test Loss')
 plt.xlabel('Fold')
 plt.ylabel('Test Loss (MSE)')
 plt.legend()
 plt.show()
 
-
+#t-sne
 model.eval()
 with torch.no_grad():
     latent_embeddings = model.encoder(X_128d).numpy()
