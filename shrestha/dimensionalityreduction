@@ -1,0 +1,39 @@
+import numpy as np
+import glob
+import torch
+import torch.nn as nn
+
+# --- 1. Load Data and Perform Spatial Averaging ---
+file_path = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/*.npz'
+print(f"Searching for files: {file_path}")
+embedding_files = glob.glob(file_path)
+print(f"Found {len(embedding_files)} files.")
+
+all_protein_vectors_384d = []
+for file in sorted(embedding_files):
+    with np.load(file) as data:
+        # Load the per-residue embeddings
+        residue_embedding = data['single']
+
+        # Convert to a PyTorch tensor
+        residue_tensor = torch.from_numpy(residue_embedding)
+
+        # Perform spatial averaging (mean over the sequence dimension)
+        protein_vector = torch.mean(residue_tensor, dim=0)
+        all_protein_vectors_384d.append(protein_vector)
+
+# Stack all protein vectors into a single tensor
+X_384d = torch.stack(all_protein_vectors_384d)
+print(f"Shape after averaging: {X_384d.shape}")
+
+
+# --- 2. Reduce Dimension using a Linear Layer ---
+if X_384d.nelement() > 0:
+    # Define a linear layer to project from 384 down to 128 dimensions
+    # This is a key part of a neural network model
+    projection_layer = nn.Linear(in_features=384, out_features=128)
+
+    # Pass your data through the layer to get the final embeddings
+    X_128d = projection_layer(X_384d)
+
+    print(f"Final shape after Linear projection: {X_128d.shape}")
