@@ -1,0 +1,162 @@
+import numpy as np
+import glob
+import torch
+import torch.nn as nn
+from sklearn.model_selection import KFold
+from torch.utils.data import DataLoader, TensorDataset
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+
+try:
+    file_path = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/*.npz'
+    embedding_files = sorted(glob.glob(file_path))
+
+    all_protein_vectors_128d = []
+    for file in embedding_files:
+        with np.load(file) as data:
+            if 'pair' in data:
+                pair_embedding = data['pair']
+                # create the averaged vector
+                protein_vector = np.mean(pair_embedding, axis=(0, 1))
+                all_protein_vectors_128d.append(protein_vector)
+
+    X_128d = torch.from_numpy(np.array(all_protein_vectors_128d)).float()
+    print(f"K-Fold shape: {X_128d.shape}")
+
+#start of the autoencoder
+class Autoencoder(nn.Module):
+    def __init__(self):
+        super(Autoencoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(128, 96), nn.ReLU(),
+            nn.Linear(96, 64)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(64, 96), nn.ReLU(),
+            nn.Linear(96, 128)
+        )
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
+
+# k-fold cross validation
+k_folds = 5
+num_epochs = 300
+batch_size = 4
+results = {}
+
+kfold = KFold(n_splits=k_folds, shuffle=True, random_state=73)
+
+for fold, (train_ids, test_ids) in enumerate(kfold.split(X_128d)):
+    print(f'FOLD {fold+1}/{k_folds}')
+
+    model = Autoencoder()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    criterion = nn.MSELoss()
+
+    train_subset = X_128d[train_ids]
+    test_subset = X_128d[test_ids]
+    train_dataset = TensorDataset(train_subset, train_subset)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    model.train()
+    for epoch in range(num_epochs):
+        for inputs, _ in train_loader:
+            reconstructed = model(inputs)
+            loss = criterion(reconstructed, inputs)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    model.eval()
+    with torch.no_grad():
+        reconstructed_test = model(test_subset)
+        test_loss = criterion(reconstructed_test, test_subset).item()
+        
+        reconstructed_train = model(train_subset)
+        train_loss = criterion(reconstructed_train, train_subset).item()
+        
+        results[fold] = {'train_loss': train_loss, 'test_loss': test_loss}
+        
+        print(f'Final Training Loss for fold {fold+1}: {train_loss:.4f}')
+        print(f'Test Loss for fold {fold+1}: {test_loss:.4f}')
+        print(f'Generalization Gap: {test_loss - train_loss:.4f}')
+
+#visualization start
+avg_train_loss = np.mean([res['train_loss'] for res in results.values()])
+avg_test_loss = np.mean([res['test_loss'] for res in results.values()])
+avg_generalization_gap = avg_test_loss - avg_train_loss
+print(f'Average Training Loss: {avg_train_loss:.4f}')
+print(f'Average Test Loss: {avg_test_loss:.4f}')
+print(f'Average Generalization Gap: {avg_generalization_gap:.4f}')
+
+print("\n--- Generating Novel Protein Embeddings ---")
+model.eval()
+with torch.no_grad():
+    protein_A = X_128d[[0]]
+    protein_B = X_128d[[10]]
+
+    latent_A = model.encoder(protein_A)
+    latent_B = model.encoder(protein_B)
+
+    hybrid_latent = (latent_A + latent_B) / 2
+
+    hybrid_protein_embedding = model.decoder(hybrid_latent)
+    print(f"Generated a hybrid protein embedding.")
+
+    all_latent_embeddings = model.encoder(X_128d)
+    
+    mean = torch.mean(all_latent_embeddings, axis=0)
+    std = torch.std(all_latent_embeddings, axis=0)
+
+    new_random_latent = torch.normal(mean, std)
+
+    new_random_protein_embedding = model.decoder(new_random_latent)
+    torch.save(new_random_protein_embedding, 'new_random_protein_embedding.pt')
+    torch.save(hybrid_protein_embedding, 'hybrid_protein_embedding.pt')
+    print(f"Generated a new random protein embedding.")
+
+    hybrid_embedding = torch.load('hybrid_protein_embedding.pt')
+    random_embedding = torch.load('new_random_protein_embedding.pt')
+
+model.eval()
+with torch.no_grad():
+    # Get the latent embeddings for all real and new proteins
+    real_latent = model.encoder(X_128d)
+    hybrid_latent = model.encoder(hybrid_embedding)
+    random_latent = model.encoder(random_embedding)
+    
+    # Ensure all tensors have 2 dimensions
+    if hybrid_latent.ndim == 1:
+        hybrid_latent = hybrid_latent.unsqueeze(0)
+    if random_latent.ndim == 1:
+        random_latent = random_latent.unsqueeze(0)
+
+    # Now, all tensors are guaranteed to have 2 dimensions
+    all_latent_embeddings = torch.cat([real_latent, hybrid_latent, random_latent], dim=0)
+
+# Run t-SNE on the combined set
+tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
+embeddings_2d = tsne.fit_transform(all_latent_embeddings.numpy())
+
+# Separate the points for plotting
+real_points = embeddings_2d[:-2]
+hybrid_point = embeddings_2d[-2]
+random_point = embeddings_2d[-1]
+
+# Create the scatter plot
+plt.figure(figsize=(12, 10))
+# Plot all the real proteins in blue
+plt.scatter(real_points[:, 0], real_points[:, 1], alpha=0.5, label='Real Proteins')
+# Plot the hybrid protein in green
+plt.scatter(hybrid_point[0], hybrid_point[1], color='green', s=200, edgecolor='black', marker='*', label='Hybrid Protein')
+# Plot the random protein in red
+plt.scatter(random_point[0], random_point[1], color='red', s=150, edgecolor='black', marker='X', label='Random Protein')
+
+plt.title('Latent Space with Generated Proteins')
+plt.xlabel('t-SNE Component 1')
+plt.ylabel('t-SNE Component 2')
+plt.legend()
+plt.grid(True)
+plt.show()
