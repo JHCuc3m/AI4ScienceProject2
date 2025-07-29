@@ -10,6 +10,8 @@ from sklearn.manifold import TSNE
 try:
     file_path = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/*.npz'
     embedding_files = sorted(glob.glob(file_path))
+    if not embedding_files:
+        raise FileNotFoundError(f"No files found at path: {file_path}")
 
     all_protein_vectors_128d = []
     for file in embedding_files:
@@ -23,16 +25,22 @@ try:
     X_128d = torch.from_numpy(np.array(all_protein_vectors_128d)).float()
     print(f"K-Fold shape: {X_128d.shape}")
 
+except (FileNotFoundError, NameError) as e:
+    print(f"Error loading data: {e}. Cannot proceed.")
+    exit()
+
 #start of the autoencoder
 class Autoencoder(nn.Module):
     def __init__(self):
         super(Autoencoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(128, 96), nn.ReLU(),
+            nn.Linear(128, 96), 
+            nn.ReLU(),
             nn.Linear(96, 64)
         )
         self.decoder = nn.Sequential(
-            nn.Linear(64, 96), nn.ReLU(),
+            nn.Linear(64, 96), 
+            nn.ReLU(),
             nn.Linear(96, 128)
         )
     def forward(self, x):
@@ -91,7 +99,6 @@ print(f'Average Training Loss: {avg_train_loss:.4f}')
 print(f'Average Test Loss: {avg_test_loss:.4f}')
 print(f'Average Generalization Gap: {avg_generalization_gap:.4f}')
 
-print("\n--- Generating Novel Protein Embeddings ---")
 model.eval()
 with torch.no_grad():
     protein_A = X_128d[[0]]
@@ -122,36 +129,27 @@ with torch.no_grad():
 
 model.eval()
 with torch.no_grad():
-    # Get the latent embeddings for all real and new proteins
     real_latent = model.encoder(X_128d)
     hybrid_latent = model.encoder(hybrid_embedding)
     random_latent = model.encoder(random_embedding)
     
-    # Ensure all tensors have 2 dimensions
     if hybrid_latent.ndim == 1:
         hybrid_latent = hybrid_latent.unsqueeze(0)
     if random_latent.ndim == 1:
         random_latent = random_latent.unsqueeze(0)
 
-    # Now, all tensors are guaranteed to have 2 dimensions
     all_latent_embeddings = torch.cat([real_latent, hybrid_latent, random_latent], dim=0)
 
-# Run t-SNE on the combined set
 tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
 embeddings_2d = tsne.fit_transform(all_latent_embeddings.numpy())
 
-# Separate the points for plotting
 real_points = embeddings_2d[:-2]
 hybrid_point = embeddings_2d[-2]
 random_point = embeddings_2d[-1]
 
-# Create the scatter plot
 plt.figure(figsize=(12, 10))
-# Plot all the real proteins in blue
 plt.scatter(real_points[:, 0], real_points[:, 1], alpha=0.5, label='Real Proteins')
-# Plot the hybrid protein in green
 plt.scatter(hybrid_point[0], hybrid_point[1], color='green', s=200, edgecolor='black', marker='*', label='Hybrid Protein')
-# Plot the random protein in red
 plt.scatter(random_point[0], random_point[1], color='red', s=150, edgecolor='black', marker='X', label='Random Protein')
 
 plt.title('Latent Space with Generated Proteins')
