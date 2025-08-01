@@ -92,7 +92,6 @@ for fold, (train_ids, test_ids) in enumerate(kfold.split(X_128d)):
 #visualization start
 avg_train_loss = np.mean([res['train_loss'] for res in results.values()])
 avg_test_loss = np.mean([res['test_loss'] for res in results.values()])
-# FIX: Define the avg_generalization_gap variable
 avg_generalization_gap = avg_test_loss - avg_train_loss
 print(f'Average Training Loss: {avg_train_loss:.4f}')
 print(f'Average Test Loss: {avg_test_loss:.4f}')
@@ -145,5 +144,66 @@ plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.7)
 plt.title('2D Latent Space (t-SNE)')
 plt.xlabel('t-SNE Component 1')
 plt.ylabel('t-SNE Component 2')
+plt.grid(True)
+plt.show()
+
+
+
+model.eval()
+with torch.no_grad():
+    #hybrid protein
+    protein_A = X_128d[[0]] #combining a + b
+    protein_B = X_128d[[10]]
+    latent_A = model.encoder(protein_A)
+    latent_B = model.encoder(protein_B)
+    hybrid_latent = (latent_A + latent_B) / 2
+    hybrid_protein_embedding = model.decoder(hybrid_latent)
+    print(f"Generated hybrid protein embedding")
+
+    #variational protein
+    base_protein = X_128d[[20]]    #real base protein
+    base_latent = model.encoder(base_protein)
+    variation_std = 0.1 
+    new_variational_latent = torch.normal(mean=base_latent, std=variation_std)
+    new_variational_embedding = model.decoder(new_variational_latent)
+    print(f"Generated variational protein embedding")
+
+    #save the generated embeddings
+    torch.save(new_variational_embedding, '2new_random_protein_embedding.pt')
+    torch.save(hybrid_protein_embedding, '2hybrid_protein_embedding.pt')
+    print(f"Generated embeddings saved.")
+
+    hybrid_embedding = torch.load('2hybrid_protein_embedding.pt')
+    random_embedding = torch.load('2new_random_protein_embedding.pt')
+
+model.eval()
+with torch.no_grad():
+    real_latent = model.encoder(X_128d)
+    hybrid_latent = model.encoder(hybrid_embedding)
+    random_latent = model.encoder(random_embedding)
+    
+    if hybrid_latent.ndim == 1:
+        hybrid_latent = hybrid_latent.unsqueeze(0)
+    if random_latent.ndim == 1:
+        random_latent = random_latent.unsqueeze(0)
+
+    all_latent_embeddings = torch.cat([real_latent, hybrid_latent, random_latent], dim=0)
+
+#t-sne with new embeddings
+tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
+embeddings_2d = tsne.fit_transform(all_latent_embeddings.numpy())
+
+real_points = embeddings_2d[:-2]
+hybrid_point = embeddings_2d[-2]
+random_point = embeddings_2d[-1]
+
+plt.figure(figsize=(12, 10))
+plt.scatter(real_points[:, 0], real_points[:, 1], alpha=0.5, label='Real Proteins')
+plt.scatter(hybrid_point[0], hybrid_point[1], color='green', s=200, edgecolor='black', marker='*', label='Hybrid Protein')
+plt.scatter(random_point[0], random_point[1], color='red', s=150, edgecolor='black', marker='X', label='Variational Protein')
+plt.title('Latent Space with Generated Proteins')
+plt.xlabel('t-SNE Component 1')
+plt.ylabel('t-SNE Component 2')
+plt.legend()
 plt.grid(True)
 plt.show()

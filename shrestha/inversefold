@@ -1,0 +1,172 @@
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+import pandas as pd
+import os
+import glob
+from sklearn.model_selection import train_test_split
+from torch.optim.lr_scheduler import StepLR
+
+EMBEDDING_DIR = '/Users/shreyasshrestha/Projects/Autoencoder/proteins/'
+SEQUENCE_CSV = '/Users/shreyasshrestha/Projects/Autoencoder/Shrestha Autoencoder/sequences.csv'
+MAX_SEQ_LENGTH = 500
+NUM_AMINO_ACIDS = 21
+
+#amino acid tokenization
+aa_to_idx = {
+    'A': 1, 'R': 2, 'N': 3, 'D': 4, 'C': 5, 'Q': 6, 'E': 7, 'G': 8, 'H': 9,
+    'I': 10, 'L': 11, 'K': 12, 'M': 13, 'F': 14, 'P': 15, 'S': 16, 'T': 17,
+    'W': 18, 'Y': 19, 'V': 20, '_': 0
+}
+VALID_AA = set(aa_to_idx.keys()) - {'_'}
+
+def load_and_prepare_data(embedding_dir, sequence_path):
+    try:
+        embedding_files = sorted(glob.glob(os.path.join(embedding_dir, '*.npz')))
+        if not embedding_files:
+            raise FileNotFoundError(f"No .npz files found in '{embedding_dir}'")
+
+        embedding_map = {}
+        for file_path in embedding_files:
+            with np.load(file_path) as data:
+                if 'pair' in data:
+                    pair_embedding = data['pair']
+                    protein_vector = np.mean(pair_embedding, axis=(0, 1))
+                    filename = os.path.basename(file_path)
+                    embedding_map[filename] = protein_vector
+        
+        sequence_map = {}
+        with open(sequence_path, 'r') as f:
+            next(f)
+            for line in f:
+                parts = line.strip().split(',', 1)
+                if len(parts) == 2:
+                    filename, sequence = parts
+                    sequence_map[filename] = sequence
+        
+        print(f"Loaded {len(embedding_map)} embeddings and {len(sequence_map)} sequences.")
+
+    except (FileNotFoundError, Exception) as e:
+        print(f"An error occurred during data loading: {e}")
+        return None, None
+
+    final_embeddings = []
+    final_sequences = []
+
+    for filename, sequence in sequence_map.items():
+        if filename in embedding_map:
+            final_embeddings.append(embedding_map[filename])
+            
+            cleaned_sequence = ''.join([char for char in sequence if char in VALID_AA])
+            truncated_sequence = cleaned_sequence[:MAX_SEQ_LENGTH]
+            tokens = [aa_to_idx.get(aa, 0) for aa in truncated_sequence]
+            padding_length = MAX_SEQ_LENGTH - len(tokens)
+            padded_tokens = tokens + [0] * padding_length
+            final_sequences.append(padded_tokens)
+
+    if not final_embeddings:
+        print("Error: No matching embeddings and sequences were found.")
+        return None, None
+
+    X_embeddings = torch.from_numpy(np.array(final_embeddings)).float()
+    Y_sequences = torch.tensor(final_sequences, dtype=torch.long)
+    
+    print(f"Successfully matched and prepared {len(X_embeddings)} samples.")
+    return X_embeddings, Y_sequences
+
+X_embeddings, Y_sequences = load_and_prepare_data(EMBEDDING_DIR, SEQUENCE_CSV)
+
+if X_embeddings is None:
+    exit()
+
+class SimpleInverseFolder(nn.Module):
+    def __init__(self, embedding_dim, output_seq_len, num_aa):
+        super(SimpleInverseFolder, self).__init__()
+        self.output_seq_len = output_seq_len
+        self.num_aa = num_aa
+        
+        self.network = nn.Sequential(
+            nn.Linear(embedding_dim, 512),
+            nn.BatchNorm1d(512), # Added Batch Normalization
+            nn.ReLU(),
+            nn.Dropout(0.4), # Increased Dropout rate
+            nn.Linear(512, 1024),
+            nn.BatchNorm1d(1024), # Added Batch Normalization
+            nn.ReLU(),
+            nn.Dropout(0.4), # Increased Dropout rate
+            nn.Linear(1024, output_seq_len * num_aa)
+        )
+
+    def forward(self, embedding):
+        raw_output = self.network(embedding)
+        logits = raw_output.view(-1, self.output_seq_len, self.num_aa)
+        return logits
+
+X_train, X_test, Y_train, Y_test = train_test_split(
+    X_embeddings, Y_sequences, test_size=0.2, random_state=42
+)
+
+model = SimpleInverseFolder(embedding_dim=128, output_seq_len=MAX_SEQ_LENGTH, num_aa=NUM_AMINO_ACIDS)
+criterion = nn.CrossEntropyLoss(ignore_index=0)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3) # Start with a slightly higher LR
+#learning rate scheduler for better optimization
+scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+
+train_dataset = TensorDataset(X_train, Y_train)
+test_dataset = TensorDataset(X_test, Y_test)
+train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False)
+
+#training begins
+print("\nStarting training for the improved inverse folding model...")
+num_epochs = 200
+for epoch in range(num_epochs):
+    model.train()
+    train_loss_epoch = 0.0
+    for embeddings_batch, sequences_batch in train_loader:
+        optimizer.zero_grad()
+        outputs = model(embeddings_batch)
+        loss = criterion(outputs.view(-1, NUM_AMINO_ACIDS), sequences_batch.view(-1))
+        loss.backward()
+        optimizer.step()
+        train_loss_epoch += loss.item()
+    
+    scheduler.step()
+        
+    if (epoch + 1) % 20 == 0:
+        model.eval()
+        test_loss_epoch = 0.0
+        with torch.no_grad():
+            for embeddings_batch, sequences_batch in test_loader:
+                test_outputs = model(embeddings_batch)
+                test_loss = criterion(test_outputs.view(-1, NUM_AMINO_ACIDS), sequences_batch.view(-1))
+                test_loss_epoch += test_loss.item()
+
+        avg_train_loss = train_loss_epoch / len(train_loader)
+        avg_test_loss = test_loss_epoch / len(test_loader)
+        
+        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}')
+
+print("Training complete.")
+
+#embedding to amino acid
+model.eval()
+
+idx_to_aa = {v: k for k, v in aa_to_idx.items()}
+
+try:
+    hybrid_embedding_path = 'hybrid_embedding.pt'
+    hybrid_embedding = torch.load(hybrid_embedding_path)
+    
+    with torch.no_grad():
+        output_probabilities = model(hybrid_embedding)
+        predicted_indices = torch.argmax(output_probabilities.squeeze(), dim=1)
+        predicted_sequence = "".join([idx_to_aa.get(idx.item(), '?') for idx in predicted_indices])
+        final_sequence = predicted_sequence.replace('_', '')
+
+        print(f"Generated sequence from '{hybrid_embedding_path}':")
+        print(final_sequence)
+
+except FileNotFoundError:
+    print(f"Could not find '{hybrid_embedding_path}'. Skipping generation.")
