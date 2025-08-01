@@ -34,13 +34,11 @@ class Autoencoder(nn.Module):
     def __init__(self):
         super(Autoencoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(128, 96), 
-            nn.ReLU(),
+            nn.Linear(128, 96), nn.ReLU(),
             nn.Linear(96, 64)
         )
         self.decoder = nn.Sequential(
-            nn.Linear(64, 96), 
-            nn.ReLU(),
+            nn.Linear(64, 96), nn.ReLU(),
             nn.Linear(96, 128)
         )
     def forward(self, x):
@@ -49,8 +47,8 @@ class Autoencoder(nn.Module):
         return decoded
 
 # k-fold cross validation
-k_folds = 5
-num_epochs = 300
+k_folds = 7
+num_epochs = 400
 batch_size = 4
 results = {}
 
@@ -99,33 +97,84 @@ print(f'Average Training Loss: {avg_train_loss:.4f}')
 print(f'Average Test Loss: {avg_test_loss:.4f}')
 print(f'Average Generalization Gap: {avg_generalization_gap:.4f}')
 
+#train loss vs test loss
+plt.figure(figsize=(12, 7))
+fold_names = [f'Fold {i+1}' for i in results.keys()]
+train_losses = [res['train_loss'] for res in results.values()]
+test_losses = [res['test_loss'] for res in results.values()]
+x = np.arange(len(fold_names))
+width = 0.35
+rects1 = plt.bar(x - width/2, train_losses, width, label='Train Loss', color='cornflowerblue')
+rects2 = plt.bar(x + width/2, test_losses, width, label='Test Loss', color='salmon')
+plt.ylabel('Loss (MSE)')
+plt.title('Training vs. Test Loss per Fold')
+plt.xticks(x, fold_names)
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.text(0.95, 0.95, f'Avg. Generalization Gap: {avg_generalization_gap:.4f}',
+         transform=plt.gca().transAxes, fontsize=12,
+         verticalalignment='top', horizontalalignment='right',
+         bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.5))
+plt.tight_layout()
+plt.show()
+
+
+#test loss
+plt.figure(figsize=(10, 6))
+fold_names_orig = [f'Fold {i+1}' for i in results.keys()]
+fold_losses_orig = [res['test_loss'] for res in results.values()]
+plt.bar(fold_names_orig, fold_losses_orig, color='skyblue')
+plt.axhline(y=avg_test_loss, color='r', linestyle='--', label=f'Average Loss: {avg_test_loss:.4f}')
+plt.title('K-Fold Cross-Validation Test Loss')
+plt.xlabel('Fold')
+plt.ylabel('Test Loss (MSE)')
+plt.legend()
+plt.show()
+
+#t-sne
 model.eval()
 with torch.no_grad():
-    protein_A = X_128d[[0]]
-    protein_B = X_128d[[10]]
+    latent_embeddings = model.encoder(X_128d).numpy()
 
+tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
+embeddings_2d = tsne.fit_transform(latent_embeddings)
+
+plt.figure(figsize=(10, 8))
+plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.7)
+plt.title('2D Latent Space (t-SNE)')
+plt.xlabel('t-SNE Component 1')
+plt.ylabel('t-SNE Component 2')
+plt.grid(True)
+plt.show()
+
+
+
+model.eval()
+with torch.no_grad():
+    #hybrid protein
+    protein_A = X_128d[[0]] #combining a + b
+    protein_B = X_128d[[10]]
     latent_A = model.encoder(protein_A)
     latent_B = model.encoder(protein_B)
-
     hybrid_latent = (latent_A + latent_B) / 2
-
     hybrid_protein_embedding = model.decoder(hybrid_latent)
-    print(f"Generated a hybrid protein embedding.")
+    print(f"Generated hybrid protein embedding")
 
-    all_latent_embeddings = model.encoder(X_128d)
-    
-    mean = torch.mean(all_latent_embeddings, axis=0)
-    std = torch.std(all_latent_embeddings, axis=0)
+    #variational protein
+    base_protein = X_128d[[20]]    #real base protein
+    base_latent = model.encoder(base_protein)
+    variation_std = 0.1 
+    new_variational_latent = torch.normal(mean=base_latent, std=variation_std)
+    new_variational_embedding = model.decoder(new_variational_latent)
+    print(f"Generated variational protein embedding")
 
-    new_random_latent = torch.normal(mean, std)
+    #save the generated embeddings
+    torch.save(new_variational_embedding, '2new_random_protein_embedding.pt')
+    torch.save(hybrid_protein_embedding, '2hybrid_protein_embedding.pt')
+    print(f"Generated embeddings saved.")
 
-    new_random_protein_embedding = model.decoder(new_random_latent)
-    torch.save(new_random_protein_embedding, 'new_random_protein_embedding.pt')
-    torch.save(hybrid_protein_embedding, 'hybrid_protein_embedding.pt')
-    print(f"Generated a new random protein embedding.")
-
-    hybrid_embedding = torch.load('hybrid_protein_embedding.pt')
-    random_embedding = torch.load('new_random_protein_embedding.pt')
+    hybrid_embedding = torch.load('2hybrid_protein_embedding.pt')
+    random_embedding = torch.load('2new_random_protein_embedding.pt')
 
 model.eval()
 with torch.no_grad():
@@ -140,6 +189,7 @@ with torch.no_grad():
 
     all_latent_embeddings = torch.cat([real_latent, hybrid_latent, random_latent], dim=0)
 
+#t-sne with new embeddings
 tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
 embeddings_2d = tsne.fit_transform(all_latent_embeddings.numpy())
 
@@ -150,8 +200,7 @@ random_point = embeddings_2d[-1]
 plt.figure(figsize=(12, 10))
 plt.scatter(real_points[:, 0], real_points[:, 1], alpha=0.5, label='Real Proteins')
 plt.scatter(hybrid_point[0], hybrid_point[1], color='green', s=200, edgecolor='black', marker='*', label='Hybrid Protein')
-plt.scatter(random_point[0], random_point[1], color='red', s=150, edgecolor='black', marker='X', label='Random Protein')
-
+plt.scatter(random_point[0], random_point[1], color='red', s=150, edgecolor='black', marker='X', label='Variational Protein')
 plt.title('Latent Space with Generated Proteins')
 plt.xlabel('t-SNE Component 1')
 plt.ylabel('t-SNE Component 2')
